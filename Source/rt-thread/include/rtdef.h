@@ -8,11 +8,51 @@
 extern "C" {
 #endif
 
+/**
+ * @addtogroup BasicDef
+ */
+
+/*@{*/
+
+/* RT-Thread version information */
+#define RT_VERSION                      3L              /**< major version number */
+#define RT_SUBVERSION                   1L              /**< minor version number */
+#define RT_REVISION                     0L              /**< revise version number */
+
+/* RT-Thread version */
+#define RTTHREAD_VERSION                ((RT_VERSION * 10000) + \
+                                         (RT_SUBVERSION * 100) + RT_REVISION)
 
 
 
 
 
+/**
+ * @ingroup BasicDef
+ *
+ * @def RT_NULL
+ * Similar as the \c NULL in C library.
+ */
+#define RT_NULL                         (0)
+
+/**
+ * Double List structure
+ */
+struct rt_list_node
+{
+    struct rt_list_node *next;
+    struct rt_list_node *prev;
+};
+typedef struct rt_list_node rt_list_t;
+
+/**
+ * Single List structure
+ */
+struct rt_slist_node
+{
+    struct rt_slisst_node *next;
+};
+typedef struct rt_slist_node rt_slist_t;
 
 /**
  * @addtogroup Thread
