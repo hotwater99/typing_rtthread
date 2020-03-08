@@ -1,5 +1,5 @@
 # typing_rtthread
- learning rtthread kernal, manually typing code
+ learning rtthread kernal, typing code manually
 
- code -- manaul type
+ code -- typing manually
  comment -- copy and paste
