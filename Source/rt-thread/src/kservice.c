@@ -460,3 +460,52 @@ rt_size_t rt_strnlen(const char *s, rt_ubase_t maxlen)
 
     return (sc - s);
 }
+
+/**
+ * This function will return the length of a string, which terminate will
+ * null character.
+ *
+ * @param s the string
+ *
+ * @return the length of string
+ */
+rt_size_t rt_strlen(const char *s)
+{
+    const char *sc;
+
+    for (sc = s; *sc != '\0'; sc++)
+        ; /* nothing */
+
+    return (sc - s);
+}
+RTM_EXPORT(rt_strlen);
+
+#ifdef RT_USING_HEAP
+/**
+ * This function will duplicate a string.
+ *
+ * @param s the string to be duplicated
+ *
+ * @return the duplicated string pointer
+ */
+char *rt_strdup(const char *s)
+{
+    rt_size_t len = rt_strlen(s) + 1;
+    char *tmp = (char *)rt_malloc(len);
+
+    if (!tmp)
+        return RT_NULL;
+
+    rt_memcpy(tmp, s, len);
+
+    return tmp;
+}
+RTM_EXPORT(rt_strdup);
+#ifdef __CC_ARM
+char *strdup(const char *s) __attribute__((alias("rt_strdup")));
+#endif
+
+
+#endif
+
+
