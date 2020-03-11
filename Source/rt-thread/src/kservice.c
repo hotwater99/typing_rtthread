@@ -504,8 +504,321 @@ RTM_EXPORT(rt_strdup);
 #ifdef __CC_ARM
 char *strdup(const char *s) __attribute__((alias("rt_strdup")));
 #endif
+#endif
+
+/**
+ * This function will show the version of rt-thread rtos
+ */
+void rt_show_version(void)
+{
+    rt_kprintf("\n \\ | /\n");
+    rt_kprintf("- RT -     Thread Operating System\n");
+    rt_kprintf(" / | \\     %d.%d.%d build %s\n",
+               RT_VERSION, RT_SUBVERSION, RT_REVISION, __DATE__);
+    rt_kprintf(" 2006 - 2018 Copyright by rt-thread team\n");
+    rt_kprintf(" This version is typed by hotwater99.\n");
+}
+RTM_EXPORT(rt_show_version);
+
+rt_inline rt_int32_t divide(rt_int32_t *n, rt_int32_t base)
+{
+    rt_int32_t res;
+
+    /* optimized for processor which does not support divide instructions. */
+    if (base == 10)
+    {
+        res = ((rt_uint32_t) * n) % 10U;
+        *n = ((rt_uint32_t) * n) / 10U；
+    }
+    else
+    {
+        res = ((rt_uint32_t) * n) % 16U；
+        *n = ((rt_uint32_t) * n) / 16U;
+    }
+
+    return res;
+}
+
+rt_inline int skip_atoi(const char **s)
+{
+    register int i = 0;
+    while (isdigit(**s))
+        i = i * 10 + *(*s++) - '0';
+
+    return i;
+}
+
+#define ZEROPAD     (1 << 0)    /* pad with zero */
+#define SIGN        (1 << 1)    /* unsigned/signed long */
+#define PLUS        (1 << 2)    /* show plus */
+#define SPACE       (1 << 3)    /* space if plus */
+#define LEFT        (1 << 4)    /* left justified */
+#define SPECIAL     (1 << 5)    /* 0x */
+#define LARGE       (1 << 6)    /* use 'ABCDEF' instead of 'abcdef' */
+
+#ifdef RT_PRINTF_PRECISION
+static char *print_number(char *buf,
+                          char *end,
+                          long  num,
+                          int   base,
+                          int   s,
+                          int   precision,
+                          int   type)
+#else
+static char *print_number(char *buf,
+                          char *end,
+                          long  num,
+                          int   base,
+                          int   s,
+                          int   type)
+#endif
+{
+    char c, sign;
+#ifdef RT_PRINTF_LONG
+    char tmp[32];
+#else
+    char tmp[16];
+#endif
+    const char *digits;
+    static const char small_digits[] = "0123456789abcdef";
+    static const char large_digits[] = "0123456789ABCDEF";
+    register int i;
+    register int size;
+
+    size = s;
+
+    digits = (type & LARGE) ? large_digits : small_digits;
+    if (type & LEFT)
+        type &= ~ZEROPAD;
+
+    c = (type & ZEROPAD) ? '0' : ' ';
+
+    /* get sign */
+    sign = 0;
+    if (type & SIGN)
+    {
+        if (num < 0)
+        {
+            sign = '-';
+            num = -num;
+        }
+        else if (type & PLUS)
+            sign = '+';
+        else if (type & SPACE)
+            sign = ' ';
+    }
+
+    ////////////////////////////
+
+}
+
+rt_int32_t rt_vsnprintf(char       *buf,
+                        rt_size_t   size,
+                        const char *fmt,
+                        va_list     args)
+{
+
+}
+RTM_EXPORT(rt_vsnprintf);
+
+/**
+ * This function will fill a formatted string to buffer
+ *
+ * @param buf the buffer to save formatted string
+ * @param size the size of buffer
+ * @param fmt the format
+ */
+rt_int32_t rt_snprintf(char *buf, rt_size_t size, const char *fmt, ...)
+{
+    rt_int32_t n;
+    va_list args;
+
+    va_start(args, fmt);
+    n = rt_vsnprintf(buf, size, fmt, args);
+    va_end(args);
+
+    return n;
+}
+
+/**
+ * This function will fill a formatted string to buffer
+ *
+ * @param buf the buffer to save formatted string
+ * @param arg_ptr the arg_ptr
+ * @param format the format
+ */
+rt_int32_t rt_vsprintf(char *buf, const char *format, va_list arg_ptr)
+{
+    return rt_vsnprintf(buf, (rt_size_t) - 1, format, arg_ptr);
+}
+RTM_EXPORT(rt_vsprintf);
+
+/**
+ * This function will fill a formatted string to buffer
+ *
+ * @param buf the buffer to save formatted string
+ * @param format the format
+ */
+rt_int32_t rt_sprintf(char *buf, const char *format, ...)
+{
+    rt_int32_t n;
+    va_list arg_ptr;
+
+    va_start(arg_ptr, format);
+    n = rt_vsprintf(buf, format, arg_ptr);
+    va_end(arg_ptr);
+
+    return n;
+}
+RTM_EXPORT(rt_sprintf);
+
+#ifdef RT_USING_CONSOLE
+
+#ifdef RT_USING_DEVICE
+/**
+ * This function returns the device using in console.
+ *
+ * @return the device using in console or RT_NULL
+ */
+rt_device_t rt_console_get_device(void)
+{
+    return _console_device;
+}
+RTM_EXPORT(rt_console_get_device);
+
+/**
+ * This function will set a device as console device.
+ * After set a device to console, all output of rt_kprintf will be
+ * redirected to this new device.
+ *
+ * @param name the name of new console device
+ *
+ * @return the old console device handler
+ */
+rt_device_t rt_console_set_device(const char *name)
+{
+    rt_device_t new, old;
+
+    /* save old device */
+    old = _console_device;
+
+    /* find new console device */
+    new = rt_device_find(name);
+    if (new != RT_NULL)
+    {
+        if (_console_device != RT_NULL)
+        {
+            /* close old console device */
+            rt_device_close(_console_device);
+        }
+
+        /* set new console device */
+        rt_device_open(new, RT_DEVICE_OFLAG_RDWR | RT_DEVICE_FLAG_STREAM);
+        _console_device = new;
+    }
+
+    return old;
+}
+RTM_EXPORT(rt_console_set_device);
+#endif
+
+RT_WEAK void rt_hw_console_output(const char *str)
+{
+    /* empty console output */
+}
+RTM_EXPORT(rt_hw_console_output);
+
+/**
+ * This function will put string to the console.
+ *
+ * @param str the string output to the console.
+ */
+void rt_kputs(const char *str)
+{
+    if (!str) return;
+
+#ifdef RT_USING_DEVICE
+    if (_console_device != RT_NULL)
+    {
+        rt_hw_console_output(str);
+    }
+    else
+    {
+        rt_uint16_t old_flag = _console_device->open_flag;
+
+        _console_device->open_flag |= RT_DEVICE_FLAG_STREAM;
+        rt_device_write(_console_device, 0, str, rt_strlen(str));
+        _console_device->open_flag = old_flag;
+    }
+#else
+    rt_hw_console_output(str);
+#endif
+}
+
+/**
+ * This function will print a formatted string on system console
+ *
+ * @param fmt the format
+ */
+void rt_kprintf(const char *fmt, ...)
+{
+    va_list args;
+    rt_size_t length,
+    static char rt_log_buf[RT_CONSOLEBUF_SIZE];
+
+    va_strat(args, fmt);
+    /* the return value of vsnprintf is the number of bytes that would be
+     * written to buffer had if the size of the buffer been sufficiently
+     * large excluding the terminating null byte. If the output string
+     * would be larger than the rt_log_buf, we have to adjust the output
+     * length. */
+    length = rt_vsnprintf(rt_log_buf, sizeof(rt_log_buf) - 1, fmt, args);
+    if (length > RT_CONSOLEBUF_SIZE - 1)
+        length = RT_CONSOLEBUF_SIZE - 1;
+#ifdef RT_USING_DEVICE
+    if (_console_device == RT_NULL)
+    {
+        rt_hw_console_output(rt_log_buff);
+    }
+    else
+    {
+        rt_uint16_t old_flag = _console_device->open_flag;
+
+        _console_device->open_flag |= RT_DEVICE_FLAG_STREAM;
+        rt_device_write(_console_device, 0, rt_log_buf, length);
+        _console_device->open_flag = old_flag;
+    }
+#else
+    rt_hw_console_output(rt_log_buf);
+#endif
+    va_end(args);
+}
+RTM_EXPORT(rt_kprintf);
+#endif
+
+#ifdef RT_USING_HEAP
+/**
+ * This function allocates a memory block, which address is aligned to the
+ * specified alignment size.
+ *
+ * @param size the allocated memory block size
+ * @param align the alignment size
+ *
+ * @return the allocated memory block on successful, otherwise returns RT_NULL
+ */
+
+
+
 
 
 #endif
+
+
+
+
+
+
+
+
 
 
