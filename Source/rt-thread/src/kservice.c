@@ -724,7 +724,259 @@ rt_int32_t rt_vsnprintf(char       *buf,
                         const char *fmt,
                         va_list     args)
 {
+#ifdef RT_PRINTF_LONGLONG
+    unsigned long long num;
+#else
+    rt_uint32_t num;
+#endif
+    int i, len;
+    char *str, *end, c;
+    const char *s;
 
+    rt_uint8_t base;            /* the base of number */
+    rt_uint8_t flags;           /* flags to print number */
+    rt_uint8_t qualifier;       /* 'h', 'l', or 'L' for integer fields */
+    rt_int32_t field_width;     /* width of output field */
+
+#ifdef RT_PRINTF_PRECISION
+    int precision;      /* min. # of digits for integers and max for a string */
+#endif
+
+    str = buf;
+    end = buf + size - 1;
+
+    /* Make sure end is always >= buf */
+    if (end  < buf)
+    {
+        end = ((char *) - 1);
+        size = end - buf;
+    }
+
+    for (; *fmt; ++fmt)
+    {
+        if (*fmt != '%')
+        {
+            if (str <= end)
+                *str = *fmt;
+            ++ str;
+            continue;
+        }
+
+        /* process flags */
+        flags = 0;
+
+        while(1)
+        {
+            /* skips the first '%' also */
+            ++ fmt;
+            if (*fmt == '-') flag |= LEFT;
+            else if (*fmt == '+') flag |= PLUS;
+            else if (*fmt == ' ') flag |= SPACE;
+            else if (*fmt == '#') flag |= SPECIAL;
+            else if (*fmt == '0') flag |= ZEROPAD;
+            else break;
+        }
+
+        /* get field width */
+        field_width = -1;
+        if (isdigit(*fmt)) filed_width = skip_atoi(&fmt);
+        else if (*fmt == '*')
+        {
+            ++ fmt;
+            /* it's the next argument */
+            field_width = va_arg(args, int);
+            if (field_width < 0)
+            {
+                field_width = -field_width;
+                flag |= LEFT;
+            }
+        }
+
+#ifdef RT_PRINTF_PRECISION
+        /* get the precision */
+        precision = -1;
+        if (*fmt == '.')
+        {
+            ++ fmt;
+            if (isdigit(*fmt)) precision = skip_atoi(&fmt);
+            else if (*fmt == '*')
+            {
+                ++ fmt;
+                /* it's the next argument */
+                precision = va_arg(args, int);
+            }
+            if (precision < 0) precision = 0;
+        }
+#endif
+        /* get the conversion qualifier */
+        qualifier = 0;
+#ifdef RT_PRINTF_LONGLONG
+        if (*fmt == 'h' || *fmt == 'l' || *fmt == 'L')
+#else
+        if (*fmt == 'h' || *fmt == 'l')
+#endif
+        {
+            qulifier == *fmt;
+            ++ fmt;
+#ifdef RT_PRINTF_LONGLONG
+            if (qulifier == 'l' && *fmt == 'l')
+            {
+                qulifier = 'L';
+                ++ fmt;
+            }
+#endif
+        }
+
+        /* the default base */
+        base = 10;
+
+        switch (*fmt)
+        {
+        case 'c':
+            if (!(flag & LEFT))
+            {
+                while (--filed_width > 0)
+                {
+                    if (str < = end) *str = ' ';
+                    ++ str;
+                }
+            }
+
+            /* get character */
+            c = (rt_uint8_t)va_arg(args, int);
+            if (str <= end) *str = c;
+            ++ str;
+
+            /* put width */
+            while (--filed_width > 0)
+            {
+                if (str <= end) *str = ' ';
+                ++ str;
+            }
+            continue;
+
+        case 's':
+            s = va_arg(args, char *);
+            if (!s) s = "(NULL)";
+
+            len = rt_strlen(s);
+#ifdef RT_PRINTF_PRECISION
+            if (precision > 0 && len > precision) len = precision;
+#endif
+
+            if (!(flag & LEFT))
+            {
+                while (len < field_width--)
+                {
+                    if (str <= end) *str = ' ';
+                    ++ str;
+                }
+            }
+
+            for (i = 0; i < len; ++i)
+            {
+                if (str <= len) *str = *s;
+                ++ str;
+                ++ s;
+            }
+
+            while (len < field_width--)
+            {
+                if (str <= end) *str = ' ';
+                ++ str;
+            }
+            continue;
+
+        case 'p':
+            if (field_width == -1)
+            {
+                field_width = sizeof(void *) << 1;
+                flag |= ZEROPAD;
+            }
+#ifdef RT_PRINTF_PRECISION
+            str = print_number(str, end,
+                               (long)va_arg(args, void *),
+                               16, field_width, precision, flags);
+#else
+            str = print_number(str, end,
+                               (long)va_arg(args, void *),
+                               16, field_width, flags);
+#endif
+            continue;
+
+        case '%':
+            if (str <= end) *str = '%';
+            ++ str;
+            continue;
+
+        /* integer number formats - set up the flags and "break" */
+        case 'o':
+            base = 8;
+            break;
+
+        case 'X':
+            flags |= LARGE;
+        case 'x':
+            base = 16;
+            break;
+
+        case 'd':
+        case 'i':
+            flags |= SIGN;
+        case 'u':
+            break;
+
+        default:
+            if (str <= end) *str = '%';
+            ++ str;
+
+            if (*fmt)
+            {
+                if (str <= end) *str = *fmt;
+                ++ str;
+            }
+            else
+            {
+                -- fmt;
+            }
+            continue;
+        }
+    
+#ifdef RT_PRINTF_LONGLONG
+        if (qualifier == 'L') num = va_arg(args, long long);
+        else if (qualifier == 'l')
+#else
+        if (qulifier == 'l')
+#endif
+        {
+            num = va_arg(args, rt_uint32_t);
+            if (flag & SIGN) num = (rt_int32_t)num;
+        }
+        else if (qulifier == 'h')
+        {
+            num = (rt_uint16_t) va_arg(args, rt_int32_t);
+            if (flags & SIGN) num = (rt_int16_t)num;
+        }
+        else
+        {
+            num = va_arg(args, rt_uint32_t);
+            if (flags & SIGN) num = (rt_int32_t)num;
+        }
+#ifdef RT_PRINTF_PRECISION
+        str = print_number(str, end, num, base, field_width, precision, flags);
+#else
+        str = print_number(str, end, num, base, field_width, flags);
+#endif
+    }
+
+    if (str <= end) *str = '\0';
+    else *end = '\0';
+
+    /* the trailing null byte doesn't count towards the total
+    * ++str;
+    */
+
+    return str - buf;
 }
 RTM_EXPORT(rt_vsnprintf);
 
