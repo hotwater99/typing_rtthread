@@ -54,6 +54,25 @@ struct rt_slist_node
 };
 typedef struct rt_slist_node rt_slist_t;
 
+
+
+
+
+/*@}*/
+
+/**
+ * @addtogroup Signal
+ */
+#ifdef RT_USING_SIGNALS
+#include <libc/libc_signal.h>
+typedef unsigned long rt_sigset_t;
+typedef void (*rt_sighandler_t)(int signo);
+typedef siginfo_t rt_siginfo_t;
+
+#define RT_SIG_MAX          32
+#endif
+/*@}*/
+
 /**
  * @addtogroup Thread
  */
