@@ -864,18 +864,382 @@ RTM_EXPORT(rt_mutex_control);
 #endif /* end of RT_USING_MUTEX */
 
 #ifdef RT_USING_EVENT
-rt_err_t rt_event_init(rt_event_t event, const char *name, rt_uint8_t flag);
-rt_err_t rt_event_detach(rt_event_t event);
-rt_event_t rt_event_create(const char *name, rt_uint8_t flag);
-rt_err_t rt_event_delete(rt_event_t event);
+/**
+ * This function will initialize an event and put it under control of resource
+ * management.
+ *
+ * @param event the event object
+ * @param name the name of event
+ * @param flag the flag of event
+ *
+ * @return the operation status, RT_EOK on successful
+ */
+rt_err_t rt_event_init(rt_event_t event, const char *name, rt_uint8_t flag)
+{
+    /* parameter check */
+    RT_ASSERT(event != RT_NULL);
 
-rt_err_t rt_event_send(rt_event_t event, rt_int32_t set);
+    /* init object */
+    rt_object_init(&(event->parent.parent), RT_Object_Class_Event);
+
+    /* set parent flag */
+    event->parent.parent.flag = flag;
+
+    /* init ipc object */
+    rt_ipc_object_init(&(event.parent));
+
+    /* init event */
+    event->set = 0;
+
+    return RT_EOK;
+}
+RTM_EXPORT(rt_event_init);
+
+/**
+ * This function will detach an event object from resource management
+ *
+ * @param event the event object
+ *
+ * @return the operation status, RT_EOK on successful
+ */
+rt_err_t rt_event_detach(rt_event_t event)
+{
+    /* parameter check */
+    RT_ASSERT(event != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&event->parent.parent) == RT_Object_Class_Event);
+    RT_ASSERT(rt_object_is_systemobject(&event->parent.parent));
+
+    /* resume all suspended thread */
+    rt_ipc_list_resume_all(&(event->parent.suspend_thread));
+
+    /* detach event object */
+    rt_object_detach(&(event->parent.parent));
+
+    return RT_EOK;
+}
+RTM_EXPORT(rt_event_detach);
+
+#ifdef RT_USING_HEAP
+/**
+ * This function will create an event object from system resource
+ *
+ * @param name the name of event
+ * @param flag the flag of event
+ *
+ * @return the created event, RT_NULL on error happen
+ */
+rt_event_t rt_event_create(const char *name, rt_uint8_t flag)
+{
+    rt_event_t event;
+
+    RT_DEBUG_NOT_IN_INTERRUPT;
+
+    /* allocate object */
+    event = (rt_event_t)rt_object_allocate(RT_Object_Class_Event, name);
+    if (event == RT_NULL)
+        return event;
+
+    /* set parent */
+    event.parent.parent.flag = flag;
+
+    /* init ipc object */
+    rt_ipc_object_init(&(event->parent));
+
+    /* init event */
+    event->set = 0;
+
+    return event;
+}
+RTM_EXPORT(rt_event_create);
+
+/**
+ * This function will delete an event object and release the memory
+ *
+ * @param event the event object
+ *
+ * @return the error code
+ */
+rt_err_t rt_event_delete(rt_event_t event)
+{
+    /* parameter check */
+    RT_ASSERT(event != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&event->parent.parent) == RT_Object_Class_Event);
+    RT_ASSERT(rt_object_is_systemobject(&event->parent.parent) == RT_FALSE);
+
+    RT_DEBUG_NOT_IN_INTERRUPT;
+
+    /* resume all suspended thread */
+    rt_ipc_list_resume_all(&(event.parent.suspend_thread));
+
+    /* delete event object */
+    rt_object_delete(&(event.parent.parent));
+
+    return RT_EOK;
+}
+RTM_EXPORT(rt_event_delete);
+#endif
+
+/**
+ * This function will send an event to the event object, if there are threads
+ * suspended on event object, it will be waked up.
+ *
+ * @param event the event object
+ * @param set the event set
+ *
+ * @return the error code
+ */
+rt_err_t rt_event_send(rt_event_t event, rt_int32_t set)
+{
+    struct rt_list_node *n;
+    struct rt_thread *thread;
+    register rt_ubase_t level;
+    register rt_base_t status;
+    rt_bool_t need_schedule;
+
+    /* parameter check */
+    RT_ASSERT(event != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&event->parent.parent) == RT_Object_Class_Event);
+
+    if (set == 0)
+        return -RT_ERROR;
+
+    need_schedule = RT_FALSE;
+
+    /* disable interrupt */
+    level = rt_hw_interrupt_disabled();
+
+    /* set event */
+    event->set |= set;
+
+    RT_OBJECT_HOOK_CALL(rt_object_put_hook, (&(event->parent.parent)));
+
+    if (!rt_list_isempty(&event->parent.suspend_thread))
+    {
+        /* search thread list to resume thread */
+        n = event->parent.suspend_thread.next;
+        while(n != &(event->parent.suspend_thread))
+        {
+            /* get thread */
+            thread = rt_list_entry(n, struct rt_thread, tlist);
+
+            status = -RT_ERROR;
+            if (thread->event_info & RT_EVENT_FLAG_AND)
+            {
+                if ((thread->event_set & event->set) == thread->event_set)
+                {
+                    /* received an AND event */
+                    status = RT_EOK;
+                }
+            }
+            else if (thread->event_info & RT_EVENT_FLAG_OR)
+            {
+                if (thread->event_set & event->set)
+                {
+                    /* save recieved event set */
+                    thread->event_set = thread->event_set & event->set;
+
+                    /* received an OR event */
+                    status = RT_EOK;
+                }
+            }
+
+            /* move node to the next */
+            n = n->next;
+
+            /* condition is satisfied, resume thread */
+            if (status == RT_EOK)
+            {
+                /* clear event */
+                if (thread->event_info & RT_EVENT_FLAG_CLEAR)
+                    event->set &= ~thread->event_set;
+
+                /* resume thread, and thread list breaks out */
+                rt_thread_resume(thread);
+
+                /* need do a scheduling */
+                need_schedule = RT_TRUE;
+            }
+        }
+    }
+    
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(level);
+
+    /* do a schedule */
+    if (need_schedule == RT_TRUE)
+        rt_schedule();
+
+    return RT_EOK;
+}
+RTM_EXPORT(rt_event_send);
+
+/**
+ * This function will receive an event from event object, if the event is
+ * unavailable, the thread shall wait for a specified time.
+ *
+ * @param event the fast event object
+ * @param set the interested event set
+ * @param option the receive option, either RT_EVENT_FLAG_AND or
+ *        RT_EVENT_FLAG_OR should be set.
+ * @param timeout the waiting time
+ * @param recved the received event, if you don't care, RT_NULL can be set.
+ *
+ * @return the error code
+ */
 rt_err_t rt_event_recv(rt_event_t   event,
                        rt_uint32_t  set,
                        rt_uint8_t   opt,
                        rt_int32_t   timeout,
-                       rt_uint32_t *recved);
-rt_err_t rt_event_control(rt_event_t event, int cmd, void *arg);
+                       rt_uint32_t *recved)
+{
+    struct rt_thread *thread;
+    register rt_ubase_t level;
+    register rt_base_t status;
+
+    RT_DEBUG_IN_THREAD_CONTEXT;
+
+    /* parameter check */
+    RT_ASSERT(event != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&event.parent.parent) == RT_Object_Class_Event);
+
+    if (set == 0)
+        return -RT_ERROR;
+
+    /* init status */
+    status = -RT_ERROR;
+
+    /* get current thread */
+    thread = rt_thread_self();
+
+    /* reset thread error */
+    thread->error = RT_EOK;
+
+    RT_OBJECT_HOOK_CALL(rt_object_trytake_hook, (&event.parent.parent));
+
+    /* disable interrupt */
+    level = rt_hw_interrupt_disabled();
+
+    /* check event set */
+    if (option & RT_EVENT_FLAG_AND)
+    {
+        if ((event->set & set) == set)
+            status = RT_EOK;
+    }
+    else if (option & RT_EVENT_FLAG_OR)
+    {
+        if (event->set & set)
+            status = RT_EOK;
+    }
+    else
+    {
+        /* either RT_EVENT_FLAG_AND or RT_EVENT_FLAG_OR should be set */
+        RT_ASSERT(0);
+    }
+
+    if (status = RT_EOK)
+    {
+        /* set received event */
+        if (recved)
+            *recved = (event->set & set);
+
+        /* received event */
+        if (option & RT_EVENT_FLAG_CLEAR)
+            event->set &= ~set;
+    }
+    else if (timeout  == 0)
+    {
+        /* no waiting */
+        thread->error = -RT_ETIMEOUT;
+    }
+    else
+    {
+        /* fill thread event info */
+        thread->event_set = set;
+        thread->event_info = option;
+
+        /* put thread to suspended thread list */
+        rt_ipc_list_suspend(&(event->parent.suspend_thread),
+                            thread,
+                            event->parent.parent.flag);
+
+        /* if there is a waiting timeout, active thread timer */
+        if (timeout > 0)
+        {
+            /* reset the timeout of thread timer and start it */
+            rt_timer_control(&(thread->thread_timer),
+                             RT_TIMER_CTRL_SET_TIME,
+                             &timeout);
+            rt_timer_start(&(thread->thread_timer));
+        }
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(level);
+
+        /* do a schedule */
+        rt_schedule();
+
+        if (thread->error != RT_EOK)
+        {
+            /* return error */
+            return thread->error;
+        }
+
+        /* received an event, disable interrupt to protect */
+        level = rt_hw_interrupt_disabled();
+
+        /* set received event */
+        if (recved)
+            *recved = thread->event_set;
+    }
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(level);
+
+    RT_OBJECT_HOOK_CALL(rt_object_take_hook, (&(event->parent.parent)));
+
+    return thread->error;
+}
+RTM_EXPORT(rt_event_recv);
+
+/**
+ * This function can get or set some extra attributions of an event object.
+ *
+ * @param event the event object
+ * @param cmd the execution command
+ * @param arg the execution argument
+ *
+ * @return the error code
+ */
+rt_err_t rt_event_control(rt_event_t event, int cmd, void *arg)
+{
+    rt_ubase_t level;
+
+    /* parameter check */
+    RT_ASSERT(event != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&event->parent.parent) == RT_Object_Class_Event);
+
+    if (cmd == RT_IPC_CMD_RESET)
+    {
+        /* disable interrupt */
+        level = rt_hw_interrupt_disabled();
+
+        /* resume all waiting thread */
+        rt_ipc_list_resume_all(&(event.parent.suspend_thread));
+
+        /* init event set */
+        event->set = 0;
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(level);
+
+        rt_schedule();
+
+        return RT_EOK;
+    }
+
+    return -RT_ERROR;
+}
+RTM_EXPORT(rt_event_control);
 #endif /* end of RT_USING_EVENT */
 
 #ifdef RT_USING_MAILBOX
@@ -883,17 +1247,59 @@ rt_err_t rt_mb_init(rt_mailbox_t mb,
                     const char  *name,
                     void        *msgpool,
                     rt_size_t    size,
-                    rt_uint8_t   flag);
-rt_err_t rt_mb_detach(rt_mailbox_t mb);
-rt_mailbox_t rt_mb_create(const char *name, rt_size_t size, rt_uint8_t flag);
-rt_err_t rt_mb_delete(rt_mailbox_t mb);
+                    rt_uint8_t   flag)
+{
+    
+}
+RTM_EXPORT(rt_mb_init);
 
-rt_err_t rt_mb_send(rt_mailbox_t mb, rt_uint32_t value);
+rt_err_t rt_mb_detach(rt_mailbox_t mb)
+{
+    
+}
+RTM_EXPORT(rt_mb_detach);
+
+
+#ifdef RT_USING_HEAP
+rt_mailbox_t rt_mb_create(const char *name, rt_size_t size, rt_uint8_t flag)
+{
+    
+}
+RTM_EXPORT(rt_mb_create);
+
+rt_err_t rt_mb_delete(rt_mailbox_t mb)
+{
+    
+}
+RTM_EXPORT(rt_mb_delete);
+
+#endif
+
+rt_err_t rt_mb_send(rt_mailbox_t mb, rt_uint32_t value)
+{
+    
+}
+RTM_EXPORT(rt_mb_send);
+
 rt_err_t rt_mn_send_wait(rt_mailbox_t mb,
                          rt_uint32_t  value,
-                         rt_int32_t   timeout);
-rt_err_t rt_mb_recv(rt_mailbox_t mb, rt_uint32_t *value, rt_int32_t timeout);
-rt_err_t rt_mb_control(rt_mailbox_t mb, int cmd, rt_int32_t *arg);
+                         rt_int32_t   timeout)
+{
+    
+}
+RTM_EXPORT(rt_mn_send_wait);
+
+rt_err_t rt_mb_recv(rt_mailbox_t mb, rt_uint32_t *value, rt_int32_t timeout)
+{
+    
+}
+RTM_EXPORT(rt_mb_recv);
+
+rt_err_t rt_mb_control(rt_mailbox_t mb, int cmd, rt_int32_t *arg)
+{
+    
+}
+RTM_EXPORT(rt_mb_control);
 #endif /* end of RT_USING_MAILBOX */
 
 #ifdef RT_USING_MESSAGEQUEUE
@@ -902,21 +1308,61 @@ rt_err_t rt_mq_init(rt_mq_t     mq,
                     void       *msgpool,
                     rt_size_t   msg_size,
                     rt_size_t   pool_size,
-                    rt_uint8_t  flag);
-rt_err_t rt_mq_detach(rt_mq_t mq);
+                    rt_uint8_t  flag)
+{
+    
+}
+RTM_EXPORT(rt_mq_init);
+
+rt_err_t rt_mq_detach(rt_mq_t mq)
+{
+    
+}
+RTM_EXPORT(rt_mq_detach);
+
+#ifdef RT_USING_HEAP
 rt_mq_t rt_mq_create(const char *name,
                      rt_size_t   msg_size,
                      rt_size_t   max_msgs,
-                     rt_uint8_t  flag);
-rt_err_t rt_mq_delete(rt_mq_t mq);
+                     rt_uint8_t  flag)
+{
+    
+}
+RTM_EXPORT(rt_mq_create);
 
-rt_err_t rt_mq_send(rt_mq_t mq, void *buffer, rt_size_t size);
-rt_err_t rt_mq_urgent(rt_mq_t mq, void *buffer, rt_size_t size);
+rt_err_t rt_mq_delete(rt_mq_t mq)
+{
+    
+}
+RTM_EXPORT(rt_mq_delete);
+#endif
+
+rt_err_t rt_mq_send(rt_mq_t mq, void *buffer, rt_size_t size)
+{
+    
+}
+RTM_EXPORT(rt_mq_send);
+
+rt_err_t rt_mq_urgent(rt_mq_t mq, void *buffer, rt_size_t size)
+{
+    
+}
+RTM_EXPORT(rt_mq_urgent);
+
 rt_err_t rt_mq_recv(rt_mq_t    mq,
                     void      *buffer,
                     rt_size_t  size,
-                    rt_int32_t timeout);
-rt_err_t rt_mq_control(rt_mq_t mq, int cmd, void *arg);
+                    rt_int32_t timeout)
+{
+    
+}
+RTM_EXPORT(rt_mq_recv);
+
+rt_err_t rt_mq_control(rt_mq_t mq, int cmd, void *arg)
+{
+    
+}
+RTM_EXPORT(rt_mq_control);
 #endif /* end of RT_USING_MESSAGEQUEUE */
 
 /**@}*/
