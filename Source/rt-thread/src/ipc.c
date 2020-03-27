@@ -1243,61 +1243,477 @@ RTM_EXPORT(rt_event_control);
 #endif /* end of RT_USING_EVENT */
 
 #ifdef RT_USING_MAILBOX
+/**
+ * This function will initialize a mailbox and put it under control of resource
+ * management.
+ *
+ * @param mb the mailbox object
+ * @param name the name of mailbox
+ * @param msgpool the begin address of buffer to save received mail
+ * @param size the size of mailbox
+ * @param flag the flag of mailbox
+ *
+ * @return the operation status, RT_EOK on successful
+ */
 rt_err_t rt_mb_init(rt_mailbox_t mb,
                     const char  *name,
                     void        *msgpool,
                     rt_size_t    size,
                     rt_uint8_t   flag)
 {
-    
+    RT_ASSERT(mb != RT_NULL);
+
+    /* init object */
+    rt_object_init(&(mb->parent.parent), RT_Object_Class_MailBox, name);
+
+    /* set parent flag */
+    mb->parent.parent.flag = flag;
+
+    /* init mailbox */
+    mb->msgpool    = msgpool;
+    mb->size       = size;
+    mb->entry      = 0;
+    mb->in_offset  = 0;
+    mb->out_offset = 0;
+
+    /* init an additional list of sender suspend thread */
+    rt_list_init(&(mb->parent.suspend_thread));
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mb_init);
 
+/**
+ * This function will detach a mailbox from resource management
+ *
+ * @param mb the mailbox object
+ *
+ * @return the operation status, RT_EOK on successful
+ */
 rt_err_t rt_mb_detach(rt_mailbox_t mb)
 {
-    
+    /* parameter check */
+    RT_ASSERT(mb != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mb->parent.parent)) == RT_Object_Class_MailBox);
+    RT_ASSERT(rt_object_is_systemobject(&mb->parent.parent));
+
+    /* resume all suspended thread */
+    rt_ipc_list_resume_all(&(mb->parent.suspend_thread));
+    /* also resume all mailbox private suspended thread */
+    rt_ipc_list_resume_all(&(mb->suspend_sender_thread));
+
+    /* detach mailbox object */
+    rt_object_detach(&(mb->parent.parent));
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mb_detach);
 
-
 #ifdef RT_USING_HEAP
+/**
+ * This function will create a mailbox object from system resource
+ *
+ * @param name the name of mailbox
+ * @param size the size of mailbox
+ * @param flag the flag of mailbox
+ *
+ * @return the created mailbox, RT_NULL on error happen
+ */
 rt_mailbox_t rt_mb_create(const char *name, rt_size_t size, rt_uint8_t flag)
 {
-    
+    rt_mailbox_t mb;
+
+    RT_DEBUG_NOT_IN_INTERRUPT;
+
+    /* allocate object */
+    mb = (rt_mailbox_t)rt_object_allocate(RT_Object_Class_MailBox, name);
+    if (mb == RT_NULL)
+        return mb;
+
+    /* set parent */
+    mb->parent.parent.flag = flag;
+
+    /* init ipc object */
+    rt_ipc_object_init(&(mb->parent));
+
+    /* init mailbox */
+    mb->size     = size;
+    mb->msg_pool = RT_KERNAL_MALLOC(mb->size * sizeof(rt_uint32_t));
+    if (mb->msg_pool == RT_NULL)
+    {
+        /* delete mailbox object */
+        rt_object_delete(&(mb->parent.parent));
+
+        return RT_NULL;
+    }
+    mb->entry      = 0;
+    mb->in_offset  = 0;
+    mb->out_offset = 0;
+
+    /* init an additional list of sender suspend thread */
+    rt_list_init(&(mb->suspend_sender_thread));
+
+    return mb;
 }
 RTM_EXPORT(rt_mb_create);
 
+/**
+ * This function will delete a mailbox object and release the memory
+ *
+ * @param mb the mailbox object
+ *
+ * @return the error code
+ */
 rt_err_t rt_mb_delete(rt_mailbox_t mb)
 {
-    
+    RT_DEBUG_NOT_IN_INTERRUPT;
+
+    /* parameter check */
+    RT_ASSERT(mb != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mb->parent.parent)) == RT_Object_Class_MailBox);
+    RT_ASSERT(rt_object_is_systemobject(&mb->parent.parent) == RT_FALSE);
+
+    /* resume all suspended thread */
+    rt_ipc_list_resume_all(&(mb->parent.suspend_thread));
+    /* also resume all mailbox private suspended thread */
+    rt_ipc_list_resume_all(&(mb->suspend_sender_thread));
+
+    /* free mailbox pool */
+    RT_KERNAL_FREE(mb->msg_pool);
+
+    /* delete mailbox object */
+    rt_object_delete(&(mb->parent.parent));
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mb_delete);
-
 #endif
 
-rt_err_t rt_mb_send(rt_mailbox_t mb, rt_uint32_t value)
-{
-    
-}
-RTM_EXPORT(rt_mb_send);
-
+/**
+ * This function will send a mail to mailbox object. If the mailbox is full,
+ * current thread will be suspended until timeout.
+ *
+ * @param mb the mailbox object
+ * @param value the mail
+ * @param timeout the waiting time
+ *
+ * @return the error code
+ */
 rt_err_t rt_mn_send_wait(rt_mailbox_t mb,
                          rt_uint32_t  value,
                          rt_int32_t   timeout)
 {
-    
+    struct rt_thread *thread;
+    register rt_ubase_t temp;
+    rt_uint32_t tick_delta;
+
+    /* parameter check */
+    RT_ASSERT(mb != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&mb->parent.parent) == RT_Object_Class_MailBox);
+
+    /* initialize delta tick */
+    tick_delta = 0;
+    /* get current thread */
+    thread = rt_thread_self();
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+
+    /* for non-blocking call */
+    if (mb->entry == mb->size && timeout == 0)
+    {
+        rt_hw_interrupt_enabled(temp);
+
+        return -RT_EFULL;
+    }
+
+    /* mailbox is full */
+    while (mb->entry == mb->size)
+    {
+        /* reset error number in thread */
+        thread->error = RT_EOK;
+
+        /* no waiting, return timeout */
+        if (timeout == 0)
+        {
+            /* enable interrupt */
+            rt_hw_interrupt_enabled(temp);
+
+            return -RT_EFULL;
+        }
+
+        RT_DEBUG_IN_THREAD_CONTEXT;
+        /* suspend current thread */
+        rt_ipc_list_suspend(&(mb->suspend_sender_thread),
+                            thread,
+                            mb->parent.parent.flag);
+
+        /* has waiting time, start thread timer */
+        if (timeout > 0)
+        {
+            /* get the start tick of timer */
+            tick_delta = rt_tick_get();
+
+            RT_DEBUG_LOG(RT_DEBUG_IPC, ("mb_send_wait: start timer of thread %s\n",
+                                        thread->name));
+
+            /* reset the timeout of thread timer and start it */
+            rt_timer_control(&(thread->thread_timer),
+                             RT_TIMER_CTRL_SET_TIME,
+                             &timeout);
+            rt_timer_start(&(thread->thread_timer));
+        }
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        /* re-schedule */
+        rt_schedule();
+
+        /* resume from suspend state */
+        if (thread->error != RT_EOK)
+        {
+            /* return error */
+            return thread->error;
+        }
+
+        /* disable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        /* if it's not waiting forever and then re-calculate timeout tick */
+        if (timeout > 0)
+        {
+            tick_delta = rt_tick_get() - tick_delta;
+            timeout -= tick_delta;
+            if (timeout < 0)
+                timeout = 0;
+        }
+    }
+
+    /* set ptr */
+    mb->msg_pool[mb->in_offset] = value;
+
+    /* increase input offset */
+    ++ mb->in_offset;
+    if (mb_in_offset >= mb_size)
+        mb_in_offset = 0;
+    /* increase message entry */
+    mb->entry ++;
+
+    /* resume suspended thread */
+    if (!rt_list_isempty(&(mb->parent.suspend_thread)))
+    {
+        rt_ipc_list_resume(&(mb->parent.suspend_thread));
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        rt_schedule();
+
+        return RT_EOK;
+    }
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mn_send_wait);
 
+/**
+ * This function will send a mail to mailbox object, if there are threads
+ * suspended on mailbox object, it will be waked up. This function will return
+ * immediately, if you want blocking send, use rt_mb_send_wait instead.
+ *
+ * @param mb the mailbox object
+ * @param value the mail
+ *
+ * @return the error code
+ */
+rt_err_t rt_mb_send(rt_mailbox_t mb, rt_uint32_t value)
+{
+    return rt_mb_send_wait(mb, value, 0);
+}
+RTM_EXPORT(rt_mb_send);
+
+/**
+ * This function will receive a mail from mailbox object, if there is no mail
+ * in mailbox object, the thread shall wait for a specified time.
+ *
+ * @param mb the mailbox object
+ * @param value the received mail will be saved in
+ * @param timeout the waiting time
+ *
+ * @return the error code
+ */
 rt_err_t rt_mb_recv(rt_mailbox_t mb, rt_uint32_t *value, rt_int32_t timeout)
 {
-    
+    struct rt_thread *thread;
+    register rt_ubase_t temp;
+    rt_uint32_t tick_delta;
+
+    /* parameter check */
+    RT_ASSERT(mb != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&mb->parent.parent) == RT_Object_Class_MailBox);
+
+    /* initialize delta tick */
+    tick_delta = 0;
+    /* get current thread */
+    thread = rt_thread_self();
+
+    RT_OBJECT_HOOK_CALL(rt_object_trytake_hook, (&(mb->parent.parent)));
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+
+    /* for non-blocking call */
+    if (mb->entry == 0 && timeout == 0)
+    {
+        rt_hw_interrupt_enabled(temp);
+
+        return -RT_EFULL;
+    }
+
+    /* mailbox is empty */
+    while (mb->entry == 0)
+    {
+        /* reset error number in thread */
+        thread->error = RT_EOK;
+
+        /* no waiting, return timeout */
+        if (timeout == 0)
+        {
+            /* enable interrupt */
+            rt_hw_interrupt_enabled(temp);
+
+            thread->error = -RT_ETIMEOUT;
+
+            return -RT_ETIMEOUT;
+        }
+
+        RT_DEBUG_IN_THREAD_CONTEXT;
+        /* suspend current thread */
+        rt_ipc_list_suspend(&(mb->parent.suspend_thread),
+                            thread,
+                            mb->parent.parent.flag);
+
+        /* has waiting time, start thread timer */
+        if (timeout > 0)
+        {
+            /* get the start tick of timer */
+            tick_delta = rt_tick_get();
+
+            RT_DEBUG_LOG(RT_DEBUG_IPC, ("mb_recv: start timer of thread: %s\n",
+                                        thread->name));
+
+            /* reset the timeout of thread timer and start it */
+            rt_timer_control(&(thread->thread_timer),
+                             RT_TIMER_CTRL_SET_TIME,
+                             &timeout);
+            rt_timer_start(&(thread->thread_timer));
+        }
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        /* re-schedule */
+        rt_schedule();
+
+        /* resume from suspend state */
+        if (thread->error != RT_EOK)
+        {
+            /* return error */
+            return thread->error;
+        }
+
+        /* disable interrupt */
+        temp = rt_hw_interrupt_disabled();
+
+        /* if it's not waiting forever and then re-calculate timeout tick */
+        if (timeout > 0)
+        {
+            tick_delta = rt_tick_get() - tick_delta;
+            timeout -= tick_delta;
+            if (timeout < 0)
+                timeout = 0;
+        }
+    }
+
+    /* fill ptr */
+    *value = mb->msg_pool[mb->out_offset];
+
+    /* increase output offset */
+    ++ mb->out_offset;
+    if (mb->out_offset >= mb->size)
+        mb->out_offset = 0;
+    /* decrease message entry */
+    mb->entry--;
+
+    /* resume suspended thread */
+    if (!rt_list_isempty(&(mb->suspend_sender_thread)))
+    {
+        rt_ipc_list_resume(&(mb->suspend_sender_thread));
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        RT_OBJECT_HOOK_CALL(rt_object_take_hook, (&(mb->parent.parent)));
+
+        rt_schedule();
+
+        return RT_EOK;
+    }
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    RT_OBJECT_HOOK_CALL(rt_object_take_hook, (&(mb->parent.parent)));
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mb_recv);
 
+/**
+ * This function can get or set some extra attributions of a mailbox object.
+ *
+ * @param mb the mailbox object
+ * @param cmd the execution command
+ * @param arg the execution argument
+ *
+ * @return the error code
+ */
 rt_err_t rt_mb_control(rt_mailbox_t mb, int cmd, rt_int32_t *arg)
 {
-    
+    rt_ubase_t level;
+
+    /* parameter check */
+    RT_ASSERT(mb != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mb->parent.parent)) == RT_Object_Class_MailBox);
+
+    if (cmd == RT_IPC_CMD_RESET)
+    {
+        /* disable interrupt */
+        level = rt_hw_interrupt_disabled();
+
+        /* resume all waiting thread */
+        rt_ipc_list_resume_all(&(mb->parent.suspend_thread));
+        /* also resume all mailbox private suspended thread */
+        rt_ipc_list_resume_all(&(mb->suspend_sender_thread));
+
+        /* re-init mailbox */
+        mb->entry      = 0;
+        mb->in_offset  = 0;
+        mb->out_offset = 0;
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(level);
+
+        rt_schedule();
+
+        return RT_EOK;
+    }
+
+    return -RT_ERROR;
 }
 RTM_EXPORT(rt_mb_control);
 #endif /* end of RT_USING_MAILBOX */
