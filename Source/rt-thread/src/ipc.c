@@ -1719,6 +1719,24 @@ RTM_EXPORT(rt_mb_control);
 #endif /* end of RT_USING_MAILBOX */
 
 #ifdef RT_USING_MESSAGEQUEUE
+struct rt_mq_message
+{
+    struct rt_mq_message *next;
+};
+
+/**
+ * This function will initialize a message queue and put it under control of
+ * resource management.
+ *
+ * @param mq the message object
+ * @param name the name of message queue
+ * @param msgpool the beginning address of buffer to save messages
+ * @param msg_size the maximum size of message
+ * @param pool_size the size of buffer to save messages
+ * @param flag the flag of message queue
+ *
+ * @return the operation status, RT_EOK on successful
+ */
 rt_err_t rt_mq_init(rt_mq_t     mq,
                     const char *name,
                     void       *msgpool,
@@ -1726,57 +1744,541 @@ rt_err_t rt_mq_init(rt_mq_t     mq,
                     rt_size_t   pool_size,
                     rt_uint8_t  flag)
 {
-    
+    struct rt_mq_message *head;
+    register rt_base_t temp;
+
+    /* parameter check */
+    RT_ASSERT(mq != RT_NULL);
+
+    /* init object */
+    rt_object_init(&(mq->parent.parent), RT_Object_Class_MessageQueue, name);
+
+    /* set parent flag */
+    mq->parent.parent.flag = flag;
+
+    /* init ipc object */
+    rt_ipc_object_init(&(mq->parent));
+
+    /* set messasge pool */
+    mq->msg_pool = msgpool;
+
+    /* get correct message size */
+    mq->msg_size = RT_ALIGN(msg_size, RT_ALIGN_SIZE);
+    mq->max_msgs = pool_size / (mq->msg_size + sizeof(struct rt_mq_message));
+
+    /* init message list */
+    mq->msg_queue_head = RT_NULL;
+    mq->msg_queue_tail = RT_NULL;
+
+    /* init message empty list */
+    mq->msg_queue_free = RT_NULL;
+    for (temp = 0; temp < mq->max_msgs; temp ++)
+    {
+        head = (struct rt_mq_message *)((rt_uint8_t *)mq->msg_pool + 
+                                        temp * (mq->msg_size + sizeof(struct rt_mq_message)));
+        head->next = mq->msg_queue_free;
+        mq->msg_queue_free = head;
+    }
+
+    /* the initial entry is zero */
+    mq->entry = 0;
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mq_init);
 
+/**
+ * This function will detach a message queue object from resource management
+ *
+ * @param mq the message queue object
+ *
+ * @return the operation status, RT_EOK on successful
+ */
 rt_err_t rt_mq_detach(rt_mq_t mq)
 {
-    
+    /* parameter check */
+    RT_ASSERT(mq != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mq->parent.parent)) == RT_Object_Class_MessageQueue);
+    RT_ASSERT(rt_object_is_systemobject(&(mq->parent.parent)));
+
+    /* resume all suspended thread */
+    rt_ipc_list_resume_all(&(mq->parent.suspend_thread));
+
+    /* detach message queue object */
+    rt_object_detach(&(mq->parent.parent));
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mq_detach);
 
 #ifdef RT_USING_HEAP
+/**
+ * This function will create a message queue object from system resource
+ *
+ * @param name the name of message queue
+ * @param msg_size the size of message
+ * @param max_msgs the maximum number of message in queue
+ * @param flag the flag of message queue
+ *
+ * @return the created message queue, RT_NULL on error happen
+ */
 rt_mq_t rt_mq_create(const char *name,
                      rt_size_t   msg_size,
                      rt_size_t   max_msgs,
                      rt_uint8_t  flag)
 {
-    
+    struct rt_messagequeue *mq;
+    struct rt_mq_message *head;
+    register rt_base_t temp;
+
+    RT_DEBUG_NOT_IN_INTERRUPT;
+
+    /* allocate object */
+    mq = (rt_mq_t)rt_object_allocate(RT_Object_Class_MessageQueue, name);
+    if (mq == RT_NULL)
+        return mq;
+
+    /* set parent */
+    mq->parent.parent.flag = flag;
+
+    /* init ipc object */
+    rt_ipc_object_init(&(mq->parent));
+
+    /* init message queue */
+
+    /* get correct message size */
+    mq->msg_size = RT_ALIGN(msg_size, RT_ALIGN_SIZE);
+    mq->max_msgs = max_msgs;
+
+    /* allocate message pool */
+    mq->msg_pool = RT_KERNAL_MALLOC((mq->msg_size + sizeof(struct rt_mq_message)) * mq->max_msgs);
+    if (mq->msg_pool == RT_NULL)
+    {
+        rt_mq_delete(mq);
+
+        return RT_NULL;
+    }
+
+    /* init message list */
+    mq->msg_queue_head = RT_NULL;
+    mq->msg_queue_tail = RT_NULL;
+
+    /* init message empty list */
+    mq->msg_queue_free = RT_NULL;
+    for (temp = 0; temp < mq->max_msgs; temp ++)
+    {
+        head = (struct rt_mq_message *)((rt_uint8_t)mq->msg_pool + 
+                                        temp * (mq->msg_size + sizeof(struct rt_mq_message)));
+    }
+
+    /* the initial entry is zero */
+    mq->entry = 0;
+
+    return mq;
 }
 RTM_EXPORT(rt_mq_create);
 
+/**
+ * This function will delete a message queue object and release the memory
+ *
+ * @param mq the message queue object
+ *
+ * @return the error code
+ */
 rt_err_t rt_mq_delete(rt_mq_t mq)
 {
-    
+    RT_DEBUG_NOT_IN_INTERRUPT;
+
+    /* parameter check */
+    RT_ASSERT(mq != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mq->parent.parent)) == RT_Object_Class_MessageQueue);
+    RT_ASSERT(rt_object_is_systemobject(&(mq->parent.parent)) == RT_FALSE);
+
+    /* resume all suspended thread */
+    rt_ipc_list_resume_all(&(mq->parent.suspend_thread));
+
+    /* free message queue pool */
+    RT_KERNAL_FREE(mq->msg_pool);
+
+    /* delete message queue object */
+    rt_object_delete(&(mq->parent.parent));
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mq_delete);
 #endif
 
+/**
+ * This function will send a message to message queue object, if there are
+ * threads suspended on message queue object, it will be waked up.
+ *
+ * @param mq the message queue object
+ * @param buffer the message
+ * @param size the size of buffer
+ *
+ * @return the error code
+ */
 rt_err_t rt_mq_send(rt_mq_t mq, void *buffer, rt_size_t size)
 {
-    
+    register rt_ubase_t temp;
+    struct rt_mq_message *msg;
+
+    /* parameter check */
+    RT_ASSERT(mq != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mq->parent.parent)) == RT_Object_Class_MessageQueue);
+    RT_ASSERT(buffer != RT_NULL);
+    RT_ASSERT(size != 0);
+
+    /* greater than one message size */
+    if (size > mq->msg_size)
+        return -RT_ERROR;
+
+    RT_OBJECT_HOOK_CALL(rt_object_put_hook, (&(mq->parent.parent)));
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+
+    /* get a free list, there must be an empty item */
+    msg = (struct rt_mq_message *)mq->msg_queue_free;
+    /* message queue is full */
+    if (msg == RT_NULL)
+    {
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        return -RT_EFULL;
+    }
+    /* move free list pointer */
+    mq->msg_queue_free = msg->next;
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    /* the msg is the new tailer of list, the next shall be NULL */
+    msg->next = RT_NULL;
+    /* copy buffer */
+    rt_memcpy(msg + 1, buffer, size);
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+    /* link msg to message queue */
+    if (mq->msg_queue_tail != RT_NULL)
+    {
+        /* if the tail exists, */
+        ((struct rt_mq_message *)mq->msg_queue_tail)->next = msg;
+    }
+
+    /* set new tail */
+    mq->msg_queue_tail = msg;
+
+    /* if the head is empty, set head */
+    if (mq->msg_queue_head == RT_NULL)
+        mq->msg_queue_head = msg;
+
+    /* increase message entry */
+    mq->entry ++;
+
+    /* resume suspended thread */
+    if (!rt_list_isempty(&mq->parent.suspend_thread))
+    {
+        rt_ipc_list_resume(&(mq->parent.suspend_thread));
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        rt_schedule();
+
+        return RT_EOK;
+    }
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mq_send);
 
+/**
+ * This function will send an urgent message to message queue object, which
+ * means the message will be inserted to the head of message queue. If there
+ * are threads suspended on message queue object, it will be waked up.
+ *
+ * @param mq the message queue object
+ * @param buffer the message
+ * @param size the size of buffer
+ *
+ * @return the error code
+ */
 rt_err_t rt_mq_urgent(rt_mq_t mq, void *buffer, rt_size_t size)
 {
-    
+    register rt_ubase_t temp;
+    struct rt_mq_message *msg;
+
+    /* parameter check */
+    RT_ASSERT(mq != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mq->parent.parent)) == RT_Object_Class_MessageQueue);
+    RT_ASSERT(buffer != RT_NULL);
+    RT_ASSERT(size != 0);
+
+    if (size > mq->msg_size)
+        return -RT_ERROR;
+
+    RT_OBJECT_HOOK_CALL(rt_object_put_hook, (&(mq->parent.parent)));
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+
+    /* get a free list, there must be an empty item */
+    msg = (struct rt_mq_message *)mq->msg_queue_free;
+    /* message queue is full */
+    if (msg == RT_NULL)
+    {
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        return -RT_EFULL;
+    }
+    /* move free list pointer */
+    mq->msg_queue_free = msg->next;
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    /* copy buffer */
+    rt_memcpy(msg + 1, buffer, size);
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+
+    /* link msg to the beginning of message queue */
+    msg->next = mq->msg_queue_head;
+    mq->msg_queue_head = msg;
+
+    /* if there is no tail */
+    if (mq->msg_queue_tail == RT_NULL)
+        mq->msg_queue_tail = msg;
+
+    /* increase message entry */
+    mq->entry ++;
+
+    /* resume suspended thread */
+    if (!rt_list_isempty(&(mq->parent.suspend_thread)))
+    {
+        rt_ipc_list_resume(&(mq->parent.suspend_thread));
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        rt_schedule();
+
+        return RT_EOK;
+    }
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mq_urgent);
 
+/**
+ * This function will receive a message from message queue object, if there is
+ * no message in message queue object, the thread shall wait for a specified
+ * time.
+ *
+ * @param mq the message queue object
+ * @param buffer the received message will be saved in
+ * @param size the size of buffer
+ * @param timeout the waiting time
+ *
+ * @return the error code
+ */
 rt_err_t rt_mq_recv(rt_mq_t    mq,
                     void      *buffer,
                     rt_size_t  size,
                     rt_int32_t timeout)
 {
+    struct rt_thread *thread;
+    register rt_ubase_t temp;
+    struct rt_mq_message *msg;
+    rt_uint32_t tick_delta;
+
+    /* parameter check */
+    RT_ASSERT(mq != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mq->parent.parent)) == RT_Object_Class_MessageQueue);
+    RT_ASSERT(buffer != RT_NULL);
+    RT_ASSERT(size != 0);
+
+    /* initialize delta tick */
+    tick_delta = 0;
+    /* get current thread */
+    thread = rt_thread_self();
+    RT_OBJECT_HOOK_CALL(rt_object_trytake_hook, (&(mq->parent.parent)));
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+
+    /* for non-blocking call */
+    if (mq->entry == 0 && timeout == 0)
+    {
+        rt_hw_interrupt_enabled(temp);
+
+        return -RT_ETIMEOUT;
+    }
+
+    /* message queue is empty */
+    while (mq->entry == 0)
+    {
+        RT_DEBUG_IN_THREAD_CONTEXT;
+
+        /* reset error number in thread */
+        thread->error = RT_EOK;
+
+        /* no waiting, return timeout */
+        if (timeout == 0)
+        {
+            /* enable interrupt */
+            rt_hw_interrupt_enabled(temp);
+
+            thread->error = -RT_ETIMEOUT;
+
+            return -RT_ETIMEOUT;
+        }
+
+        /* suspend current thread */
+        rt_ipc_list_suspend(&(mq->parent.suspend_thread),
+                            thread,
+                            mq->parent.parent.flag);
+
+        /* has waiting time, start thread timer */
+        if (timeout > 0)
+        {
+            tick_delta = rt_tick_get();
+
+            RT_DEBUG_LOG(RT_DEBUG_IPC, ("Set thread: %s to timer list\n",
+                                        thread->name));
+
+            /* reset the timeout of thread timer and start it */
+            rt_timer_control(&(thread->thread_timer),
+                             RT_TIMER_CTRL_SET_TIME,
+                             &timeout);
+            rt_timer_start(&(thread->thread_timer));
+        }
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(temp);
+
+        /* re-schedule */
+        rt_schedule();
+
+        /* recv message */
+        if (thread->error != RT_EOK)
+        {
+            /* return error */
+            return thread->error;
+        }
+
+        /* disable interrupt */
+        temp = rt_hw_interrupt_disabled();
+
+        /* if it's not waiting forever and then re-calculate timeout tick */
+        if (timeout > 0)
+        {
+            tick_delta = rt_tick_get() - tick_delta;
+            timeout -= tick_delta;
+            if (timeout < 0)
+                timeout = 0;
+        }
+    }
+
+    /* get message from queue */
+    msg = (struct rt_mq_message *)mq->msg_queue_head;
+
+    /* move message queue head */
+    mq->msg_queue_head = msg->next;
+    /* reach queue tail, set to NULL */
+    if (mq->msg_queue_tail == msg)
+        mq->msg_queue_tail = RT_NULL;
+
+    /* decrease message entry */
+    mq->entry --;
+
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    /* copy message */
+    rt_memcpy(buffer, msg + 1, size > mq->msg_size ? mq->msg_size : size);
+
+    /* disable interrupt */
+    temp = rt_hw_interrupt_disabled();
+    /* put message to free list */
+    msg->next = (struct rt_mq_message *)mq->msg_queue_free->next;
+    mq->msg_queue_free = msg;
+    /* enable interrupt */
+    rt_hw_interrupt_enabled(temp);
+
+    RT_OBJECT_HOOK_CALL(rt_object_take_hook, (&(mq->parent.parent)));
     
+    return RT_EOK;
 }
 RTM_EXPORT(rt_mq_recv);
 
+/**
+ * This function can get or set some extra attributions of a message queue
+ * object.
+ *
+ * @param mq the message queue object
+ * @param cmd the execution command
+ * @param arg the execution argument
+ *
+ * @return the error code
+ */
 rt_err_t rt_mq_control(rt_mq_t mq, int cmd, void *arg)
 {
-    
+    rt_ubase_t level;
+    struct rt_mq_message *msg;
+
+    /* parameter check */
+    RT_ASSERT(mq != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&(mq->parent.parent)) == RT_Object_Class_MessageQueue);
+
+    if (cmd == RT_IPC_CMD_RESET)
+    {
+        /* disable interrupt */
+        level = rt_hw_interrupt_disabled();
+
+        /* resume all waiting thread */
+        rt_ipc_list_resume_all(&(mq->parent.suspend_thread));
+
+        /* release all message in the queue */
+        while (mq->msg_queue_head != RT_NULL)
+        {
+            /* get message from queue */
+            msg = (struct rt_mq_message *)mq->msg_queue_head;
+
+            /* move message queue head */
+            mq->msg_queue_head = msg->next;
+            /* reach queue tail, set to NULL */
+            if (mq->msg_queue_tail == msg)
+                mq->msg_queue_tail = RT_NULL;
+
+            /* put message to free list */
+            msg->next = mq->msg_queue_free;
+            mq->msg_queue_free = msg;
+        }
+
+        /* clean entry */
+        mq->entry = 0;
+
+        /* enable interrupt */
+        rt_hw_interrupt_enabled(level);
+
+        rt_schedule();
+
+        return RT_EOK;
+    }
+
+    return -RT_ERROR;
 }
 RTM_EXPORT(rt_mq_control);
 #endif /* end of RT_USING_MESSAGEQUEUE */
