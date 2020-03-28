@@ -210,15 +210,15 @@ typedef int (*init_fn_t)(void);
 
 /* kernel malloc definitions */
 #ifndef RT_KERNEL_MALLOC
-#define RT_KERNAL_MALLOC(sz)            rt_malloc(sz)
+#define RT_KERNEL_MALLOC(sz)            rt_malloc(sz)
 #endif
 
-#ifndef RT_KERNAL_FREE
-#define RT_KERNAL_FREE(ptr)             rt_free(ptr)
+#ifndef RT_KERNEL_FREE
+#define RT_KERNEL_FREE(ptr)             rt_free(ptr)
 #endif
 
-#ifndef RT_KERNAL_REALLOC
-#define RT_KERNAL_REALLOC(ptr, size)    rt_realloc(ptr, size)
+#ifndef RT_KERNEL_REALLOC
+#define RT_KERNEL_REALLOC(ptr, size)    rt_realloc(ptr, size)
 #endif
 
 /**

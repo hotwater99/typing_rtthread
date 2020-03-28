@@ -336,7 +336,7 @@ void rt_thread_alloc_sig(rt_thread_t tid)
     rt_base_t level;
     rt_sighandler_t *vectors;
 
-    vectors = (rt_sighandler_t *)RT_KERNAL_MALLOC(sizeof(rt_handler_t) * RT_SIG_MAX);
+    vectors = (rt_sighandler_t *)RT_KERNEL_MALLOC(sizeof(rt_handler_t) * RT_SIG_MAX);
     RT_ASSERT(vectors != RT_NULL);
 
     for (index = 0; index < RT_SIG_MAX; index++)
@@ -381,7 +381,7 @@ void rt_thread_free_sig(rt_thread_t tid)
 
     if (sig_vectors)
     {
-        RT_KERNAL_FREE(sig_vectors);
+        RT_KERNEL_FREE(sig_vectors);
     }
 }
 

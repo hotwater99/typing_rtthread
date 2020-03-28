@@ -1338,7 +1338,7 @@ rt_mailbox_t rt_mb_create(const char *name, rt_size_t size, rt_uint8_t flag)
 
     /* init mailbox */
     mb->size     = size;
-    mb->msg_pool = RT_KERNAL_MALLOC(mb->size * sizeof(rt_uint32_t));
+    mb->msg_pool = RT_KERNEL_MALLOC(mb->size * sizeof(rt_uint32_t));
     if (mb->msg_pool == RT_NULL)
     {
         /* delete mailbox object */
@@ -1379,7 +1379,7 @@ rt_err_t rt_mb_delete(rt_mailbox_t mb)
     rt_ipc_list_resume_all(&(mb->suspend_sender_thread));
 
     /* free mailbox pool */
-    RT_KERNAL_FREE(mb->msg_pool);
+    RT_KERNEL_FREE(mb->msg_pool);
 
     /* delete mailbox object */
     rt_object_delete(&(mb->parent.parent));
@@ -1851,7 +1851,7 @@ rt_mq_t rt_mq_create(const char *name,
     mq->max_msgs = max_msgs;
 
     /* allocate message pool */
-    mq->msg_pool = RT_KERNAL_MALLOC((mq->msg_size + sizeof(struct rt_mq_message)) * mq->max_msgs);
+    mq->msg_pool = RT_KERNEL_MALLOC((mq->msg_size + sizeof(struct rt_mq_message)) * mq->max_msgs);
     if (mq->msg_pool == RT_NULL)
     {
         rt_mq_delete(mq);
@@ -1898,7 +1898,7 @@ rt_err_t rt_mq_delete(rt_mq_t mq)
     rt_ipc_list_resume_all(&(mq->parent.suspend_thread));
 
     /* free message queue pool */
-    RT_KERNAL_FREE(mq->msg_pool);
+    RT_KERNEL_FREE(mq->msg_pool);
 
     /* delete message queue object */
     rt_object_delete(&(mq->parent.parent));

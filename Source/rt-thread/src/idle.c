@@ -197,7 +197,7 @@ void rt_thread_idle_excute(void)
 
 #ifdef RT_USING_HEAP
         /* release thread's stack */
-        RT_KERNAL_FREE(thread->stack_addr);
+        RT_KERNEL_FREE(thread->stack_addr);
         /* delete thread object */
         rt_object_delete((rt_object_t)thread);
 #endif

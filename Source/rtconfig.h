@@ -1,7 +1,7 @@
 #ifndef RT_CONFIG_H__
 #define RT_CONFIG_H__
 
-/* RT-Thread Kernal */
+/* RT-Thread KERNEL */
 
 #define RT_NAME_MAX                    8
 #define RT_ALIGN_SIZE                  4
@@ -31,7 +31,7 @@
 #define RT_USING_SMALL_MEM
 #define RT_USING_HEAP
 
-/* Kernal Device Object */
+/* KERNEL Device Object */
 #define RT_USING_DEVICE
 #define RT_USING_CONSOLE
 #define RT_CONSOLEBUF_SIZE             128
